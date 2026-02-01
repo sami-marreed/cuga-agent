@@ -78,7 +78,11 @@ class PolicyContext(BaseModel):
             if include_conversation_history and self.chat_messages:
                 # Use last 5 messages to provide context while keeping token usage reasonable
                 recent_messages = self.chat_messages[-5:]
-                conversation_context = " ".join(recent_messages)
+                # Handle both string messages and message objects (defensive)
+                conversation_context = " ".join(
+                    msg.content if hasattr(msg, 'content') else str(msg)
+                    for msg in recent_messages
+                )
                 # Combine conversation history with current input for comprehensive matching
                 return conversation_context
             return self.user_input or ""

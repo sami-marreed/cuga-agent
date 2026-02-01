@@ -234,7 +234,7 @@ async def test_intent_guard_blocks_bypass_with_confirmation():
             ],
             response=IntentGuardResponse(
                 response_type="natural_language",
-                content="❌ Account deletion is not allowed. Contact support at support@example.com.",
+                content="❌ Account deletion is not allowed through this interface. Please contact support.",
             ),
             allow_override=False,
             priority=100,
@@ -284,7 +284,7 @@ async def test_intent_guard_blocks_bypass_with_confirmation():
         
         second_turn_messages = [
             HumanMessage(content="delete my account"),
-            AIMessage(content="❌ Account deletion is not allowed. Contact support at support@example.com."),
+            AIMessage(content="❌ Account deletion is not allowed through this interface. Please contact support."),
             HumanMessage(content="yes, do that"),
         ]
         
