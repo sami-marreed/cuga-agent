@@ -55,20 +55,32 @@ class PolicyContext(BaseModel):
     agent_response: Optional[str] = Field(None, description="Last agent response")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
-    def get_target_text(self, target: str) -> str:
+    def get_target_text(self, target: str, include_conversation_history: bool = False) -> str:
         """
         Get text from the specified target field.
 
         For "agent_response" target, automatically combines user_input and agent_response
         to provide full context for OUTPUT_FORMATTER policies.
 
+        For "intent" or "user_input" targets, can optionally include conversation history
+        to prevent bypassing intent guards with follow-up messages.
+
         Args:
             target: Target field name
+            include_conversation_history: If True, includes recent chat messages for intent targets
 
         Returns:
             Text content from the target field
         """
         if target == "intent" or target == "user_input":
+            # For intent guards, include conversation history to prevent bypasses
+            # where users say "try anyway" or confirm after being blocked
+            if include_conversation_history and self.chat_messages:
+                # Use last 5 messages to provide context while keeping token usage reasonable
+                recent_messages = self.chat_messages[-5:]
+                conversation_context = " ".join(recent_messages)
+                # Combine conversation history with current input for comprehensive matching
+                return conversation_context
             return self.user_input or ""
         elif target == "chat_messages":
             return " ".join(self.chat_messages) if self.chat_messages else ""
@@ -144,13 +156,14 @@ class PolicyAgent:
         self.llm = llm
         self.embedding_function = embedding_function
 
-    async def _check_trigger(self, trigger: Trigger, context: PolicyContext) -> tuple[bool, float, str]:
+    async def _check_trigger(self, trigger: Trigger, context: PolicyContext, include_conversation_history: bool = False) -> tuple[bool, float, str]:
         """
         Check if a trigger matches the current context.
 
         Args:
             trigger: Trigger to check
             context: Current context
+            include_conversation_history: If True, includes conversation history for intent targets
 
         Returns:
             Tuple of (matched, confidence, reasoning)
@@ -159,7 +172,9 @@ class PolicyAgent:
             return True, 1.0, "Always trigger - matches all contexts"
 
         elif isinstance(trigger, KeywordTrigger):
-            target_text = context.get_target_text(trigger.target)
+            # For intent targets, include conversation history to prevent bypasses
+            use_history = include_conversation_history and trigger.target in ("intent", "user_input")
+            target_text = context.get_target_text(trigger.target, include_conversation_history=use_history)
             if not target_text:
                 return False, 0.0, f"No text found in target field: {trigger.target}"
 
@@ -248,7 +263,9 @@ class PolicyAgent:
                     return False, 0.0, f"Invalid regex pattern: {e}"
 
         elif isinstance(trigger, NaturalLanguageTrigger):
-            target_text = context.get_target_text(trigger.target)
+            # For intent targets, include conversation history to prevent bypasses
+            use_history = include_conversation_history and trigger.target in ("intent", "user_input")
+            target_text = context.get_target_text(trigger.target, include_conversation_history=use_history)
             if not target_text:
                 return False, 0.0, f"No text found in target field: {trigger.target}"
 
@@ -318,13 +335,17 @@ class PolicyAgent:
         confidences = []
         all_matched = True
 
+        # For Intent Guards, include conversation history to prevent bypasses
+        # where users confirm or retry after being blocked
+        include_history = isinstance(policy, IntentGuard)
+
         # Check all triggers (skip NL triggers if requested)
         for i, trigger in enumerate(policy.triggers):
             if skip_nl_triggers and isinstance(trigger, NaturalLanguageTrigger):
                 logger.debug(f"  - Skipping NL trigger {i + 1} (already handled via conflict resolution)")
                 continue
 
-            matched, confidence, reasoning = await self._check_trigger(trigger, context)
+            matched, confidence, reasoning = await self._check_trigger(trigger, context, include_conversation_history=include_history)
             trigger_details[f"trigger_{i}"] = {
                 "type": trigger.type,
                 "matched": matched,
